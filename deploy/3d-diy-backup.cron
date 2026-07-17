@@ -1,0 +1,2 @@
+# Daily at 00:15 UTC (03:15 Europe/Moscow).
+15 0 * * * root cd /opt/3d-diy && /usr/bin/docker compose run --rm --no-deps bot diy-bot-backup >> /var/log/3d-diy-backup.log 2>&1

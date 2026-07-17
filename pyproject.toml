@@ -21,6 +21,7 @@ dev = [
 
 [project.scripts]
 diy-bot = "diy_bot.main:run"
+diy-bot-backup = "diy_bot.backup:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/diy_bot"]

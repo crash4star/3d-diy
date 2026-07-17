@@ -81,6 +81,8 @@ ORDERS_TOPIC_ID=123
 DATABASE_PATH=data/bot.db
 ADMIN_IDS=123456789,987654321
 LOG_LEVEL=INFO
+BACKUP_DIR=data/backups
+BACKUP_RETENTION_COUNT=14
 ```
 
 Если группа работает без тем, задайте `ORDERS_TOPIC_ID=0`.
@@ -108,10 +110,67 @@ docker compose logs -f bot
 
 База хранится в каталоге `data/`, подключённом к контейнеру как постоянный том.
 
+## Резервное копирование
+
+Команда `diy-bot-backup` создаёт согласованную копию работающей SQLite-базы через
+Online Backup API, проверяет её командой `PRAGMA integrity_check`, выставляет права
+`600` и оставляет только заданное количество последних файлов.
+
+Ручной запуск в Docker:
+
+```bash
+docker compose run --rm --no-deps bot diy-bot-backup
+```
+
+Копии сохраняются в `data/backups/`. По умолчанию хранятся последние 14 файлов.
+Настройки:
+
+```dotenv
+BACKUP_DIR=data/backups
+BACKUP_RETENTION_COUNT=14
+```
+
+Для ежедневного запуска на VPS установите cron-файл из репозитория:
+
+```bash
+sudo cp deploy/3d-diy-backup.cron /etc/cron.d/3d-diy-backup
+sudo chmod 644 /etc/cron.d/3d-diy-backup
+```
+
+Задание выполняется ежедневно в `00:15 UTC` (`03:15 Europe/Moscow`) и пишет журнал
+в `/var/log/3d-diy-backup.log`.
+
+Проверка последних копий:
+
+```bash
+ls -lh data/backups
+tail -50 /var/log/3d-diy-backup.log
+```
+
+### Восстановление
+
+Перед восстановлением остановите бота и сохраните повреждённую базу отдельно:
+
+```bash
+cd /opt/3d-diy
+docker compose stop bot
+mkdir -p data/restore-quarantine
+mv data/bot.db* data/restore-quarantine/
+cp data/backups/ИМЯ_КОПИИ.sqlite3 data/bot.db
+chown 10001:10001 data/bot.db
+chmod 600 data/bot.db
+docker compose up -d bot
+```
+
+Локальные копии на том же VPS защищают от логической порчи и случайного удаления,
+но не от потери всего сервера. Для полной схемы восстановления их следует позднее
+дублировать во внешнее хранилище.
+
 ## Структура
 
 ```text
 src/diy_bot/
+├── backup.py        # проверяемые SQLite-бэкапы и ротация
 ├── config.py        # переменные окружения
 ├── handlers.py      # команды, FSM и кнопки Telegram
 ├── models.py        # модели заявки
@@ -129,13 +188,12 @@ src/diy_bot/
 квартиры и телефон не запрашиваются. Токен читается из `.env`, который исключён
 из Git.
 
-Для резервной копии при остановленном боте достаточно скопировать `data/bot.db`.
-При работающем боте следует копировать базу штатной командой SQLite backup, чтобы
-учесть WAL-файл.
+Резервные копии создаются штатной командой SQLite Online Backup, поэтому учитывают
+WAL и не требуют остановки бота.
 
 ## Следующие этапы
 
 1. Мягкий антифлуд, предупреждения и команды администраторов.
-2. Автоматическое резервное копирование SQLite.
+2. Внешнее хранение резервных копий.
 3. RSS-очередь новостей с ручным согласованием.
 4. Настраиваемые тексты, темы и лимиты без изменения кода.
