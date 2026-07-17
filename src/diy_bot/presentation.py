@@ -38,6 +38,19 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def rules_acceptance_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Правила принимаю",
+                    callback_data=f"rules:accept:{user_id}",
+                )
+            ]
+        ]
+    )
+
+
 def format_order(order: Order | OrderDraft, *, preview: bool = False) -> str:
     heading = "🧩 <b>Предпросмотр заявки</b>" if preview else f"🧩 <b>Заявка #{order.id:03d}</b>"
     attachment = "Да" if order.attachment_file_id else "Нет"

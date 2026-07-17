@@ -6,6 +6,7 @@ from diy_bot.presentation import (
     RULES_BUTTON,
     format_order,
     main_menu_keyboard,
+    rules_acceptance_keyboard,
 )
 
 
@@ -41,3 +42,9 @@ def test_main_menu_contains_primary_actions() -> None:
         CANCEL_BUTTON,
     }
     assert keyboard.is_persistent is True
+
+
+def test_rules_acceptance_button_is_bound_to_user() -> None:
+    keyboard = rules_acceptance_keyboard(42)
+
+    assert keyboard.inline_keyboard[0][0].callback_data == "rules:accept:42"

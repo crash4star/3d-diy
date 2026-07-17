@@ -10,6 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 
 from .config import Settings
 from .handlers import router
+from .member_repository import MemberRepository
 from .repository import OrderRepository
 
 
@@ -20,7 +21,9 @@ async def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     repository = OrderRepository(settings.database_path)
+    member_repository = MemberRepository(settings.database_path)
     await repository.initialize()
+    await member_repository.initialize()
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
@@ -29,6 +32,7 @@ async def main() -> None:
         bot,
         settings=settings,
         repository=repository,
+        member_repository=member_repository,
         allowed_updates=dispatcher.resolve_used_update_types(),
     )
 

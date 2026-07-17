@@ -11,6 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .config import Settings
+from .member_repository import MemberRepository
 from .models import Order, OrderDraft, OrderStatus
 from .presentation import (
     CANCEL_BUTTON,
@@ -22,6 +23,7 @@ from .presentation import (
     main_menu_keyboard,
     order_keyboard,
     preview_keyboard,
+    rules_acceptance_keyboard,
 )
 from .repository import OrderRepository
 from .states import OrderForm
@@ -45,6 +47,16 @@ QUESTIONS = {
     OrderForm.deadline: "Когда деталь должна быть готова?",
     OrderForm.budget: "Укажите бюджет, принцип расчёта или вариант обмена.",
 }
+
+NEW_MEMBER_RULES_TEXT = """Добро пожаловать, {member_link}!
+
+Перед участием подтвердите краткие правила:
+• общаемся уважительно и без спама;
+• публикуем только тематические объявления;
+• не обсуждаем незаконные и опасные изделия;
+• личные данные и оплату согласовываем в личных сообщениях.
+
+Нажмите кнопку ниже, если принимаете правила."""
 
 
 def _text(message: Message, *, max_length: int = 500) -> str | None:
@@ -83,6 +95,46 @@ async def start(message: Message, state: FSMContext) -> None:
     parts = (message.text or "").split(maxsplit=1)
     if message.chat.type == ChatType.PRIVATE and len(parts) == 2 and parts[1] == "order":
         await _begin_order(message, state)
+
+
+@router.message(F.new_chat_members)
+async def welcome_new_members(message: Message, member_repository: MemberRepository) -> None:
+    for member in message.new_chat_members or []:
+        if member.is_bot:
+            continue
+        member_link = f'<a href="tg://user?id={member.id}">{escape(member.full_name)}</a>'
+        if await member_repository.has_accepted_rules(message.chat.id, member.id):
+            await message.answer(f"С возвращением, {member_link}! Правила уже приняты.")
+            continue
+        await message.answer(
+            NEW_MEMBER_RULES_TEXT.format(member_link=member_link),
+            reply_markup=rules_acceptance_keyboard(member.id),
+        )
+
+
+@router.callback_query(F.data.startswith("rules:accept:"))
+async def accept_group_rules(callback: CallbackQuery, member_repository: MemberRepository) -> None:
+    expected_user_id = _callback_user_id(callback.data)
+    if expected_user_id is None:
+        await callback.answer("Некорректная кнопка", show_alert=True)
+        return
+    if callback.from_user.id != expected_user_id:
+        await callback.answer("Эта кнопка предназначена другому участнику", show_alert=True)
+        return
+    if callback.message is None:
+        await callback.answer("Сообщение уже недоступно", show_alert=True)
+        return
+
+    created = await member_repository.accept_rules(
+        callback.message.chat.id,
+        callback.from_user.id,
+        callback.from_user.full_name,
+    )
+    await callback.answer("Правила приняты" if created else "Вы уже приняли правила")
+    await callback.message.edit_text(
+        f"✅ {escape(callback.from_user.full_name)}, правила приняты. Добро пожаловать!",
+        reply_markup=None,
+    )
 
 
 @router.message(Command("rules"))
@@ -400,6 +452,14 @@ async def _publish_order(bot: Bot, settings: Settings, order: Order) -> Message:
 
 
 def _callback_order_id(data: str | None) -> int | None:
+    try:
+        value = int((data or "").rsplit(":", 1)[1])
+    except (IndexError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _callback_user_id(data: str | None) -> int | None:
     try:
         value = int((data or "").rsplit(":", 1)[1])
     except (IndexError, ValueError):
