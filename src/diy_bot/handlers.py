@@ -26,6 +26,7 @@ from .presentation import (
     my_orders_keyboard,
     order_keyboard,
     preview_keyboard,
+    ready_order_keyboard,
     responses_keyboard,
     rules_acceptance_keyboard,
 )
@@ -463,12 +464,14 @@ async def select_order_response(
                 f"заявки #{order_id:03d}. "
                 "Свяжитесь с ним лично."
             )
+            reply_markup = assigned_order_keyboard(order_id)
         else:
             text = (
                 f"По заявке #{order_id:03d} заказчик выбрал другого исполнителя. Спасибо за отклик!"
             )
+            reply_markup = None
         try:
-            await bot.send_message(response.respondent_id, text)
+            await bot.send_message(response.respondent_id, text, reply_markup=reply_markup)
         except TelegramAPIError as error:
             logger.warning(
                 "Не удалось уведомить пользователя %s о выборе по заявке %s: %s",
@@ -489,8 +492,43 @@ async def select_order_response(
             logger.warning("Не удалось обновить опубликованную заявку %s: %s", order_id, error)
 
 
+@router.callback_query(F.data.startswith("order:ready:"))
+async def mark_order_ready(callback: CallbackQuery, bot: Bot, repository: OrderRepository) -> None:
+    order_id = _callback_order_id(callback.data)
+    if order_id is None:
+        await callback.answer("Некорректный номер заявки", show_alert=True)
+        return
+    order = await repository.mark_ready(order_id, callback.from_user.id)
+    if order is None:
+        await callback.answer(
+            "Отметить готовность может только выбранный исполнитель", show_alert=True
+        )
+        return
+
+    await callback.answer("Заказ отмечен как готовый", show_alert=True)
+    try:
+        await bot.send_message(
+            order.author_id,
+            f"📦 Исполнитель отметил заявку #{order.id:03d} как готовую.",
+            reply_markup=ready_order_keyboard(order.id),
+        )
+    except TelegramAPIError as error:
+        logger.warning("Не удалось уведомить автора о готовности заявки %s: %s", order.id, error)
+
+    if order.published_chat_id and order.published_message_id:
+        try:
+            await bot.edit_message_text(
+                format_order(order),
+                chat_id=order.published_chat_id,
+                message_id=order.published_message_id,
+                reply_markup=ready_order_keyboard(order.id),
+            )
+        except TelegramAPIError as error:
+            logger.warning("Не удалось обновить готовую заявку %s: %s", order.id, error)
+
+
 @router.callback_query(F.data.startswith("order:close:"))
-async def close_order(callback: CallbackQuery, repository: OrderRepository) -> None:
+async def close_order(callback: CallbackQuery, bot: Bot, repository: OrderRepository) -> None:
     order_id = _callback_order_id(callback.data)
     if order_id is None:
         await callback.answer("Некорректный номер заявки", show_alert=True)
@@ -506,9 +544,32 @@ async def close_order(callback: CallbackQuery, repository: OrderRepository) -> N
         await callback.answer("Заявка уже закрыта", show_alert=True)
         return
     closed_order = await repository.get(order_id)
-    await callback.answer("Заявка закрыта")
-    if callback.message and closed_order:
-        await callback.message.edit_text(format_order(closed_order), reply_markup=None)
+    await callback.answer("Заказ завершён")
+    if closed_order and closed_order.published_chat_id and closed_order.published_message_id:
+        try:
+            await bot.edit_message_text(
+                format_order(closed_order),
+                chat_id=closed_order.published_chat_id,
+                message_id=closed_order.published_message_id,
+                reply_markup=None,
+            )
+        except TelegramAPIError as error:
+            logger.warning("Не удалось обновить завершённую заявку %s: %s", order_id, error)
+
+    responses = await repository.list_responses(order_id)
+    selected = next((response for response in responses if response.selected_at), None)
+    if selected:
+        try:
+            await bot.send_message(
+                selected.respondent_id,
+                f"✅ Заказчик завершил заявку #{order_id:03d}. Спасибо за работу!",
+            )
+        except TelegramAPIError as error:
+            logger.warning(
+                "Не удалось уведомить исполнителя о завершении заявки %s: %s",
+                order_id,
+                error,
+            )
 
 
 def _draft_from_data(message: Message, data: dict[str, object]) -> OrderDraft:

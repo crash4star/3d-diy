@@ -8,6 +8,7 @@ from enum import StrEnum
 class OrderStatus(StrEnum):
     OPEN = "open"
     ASSIGNED = "assigned"
+    READY = "ready"
     CLOSED = "closed"
 
 

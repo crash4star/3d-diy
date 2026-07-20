@@ -53,6 +53,9 @@ class OrderRepository:
     ) -> OrderSelection | None:
         return await self._run(self._select_response_sync, order_id, author_id, respondent_id)
 
+    async def mark_ready(self, order_id: int, respondent_id: int) -> Order | None:
+        return await self._run(self._mark_ready_sync, order_id, respondent_id)
+
     async def mark_published(self, order_id: int, chat_id: int, message_id: int) -> None:
         await self._run(self._mark_published_sync, order_id, chat_id, message_id)
 
@@ -93,7 +96,7 @@ class OrderRepository:
                     attachment_file_id TEXT,
                     attachment_type TEXT,
                     status TEXT NOT NULL DEFAULT 'open'
-                        CHECK (status IN ('open', 'assigned', 'closed')),
+                        CHECK (status IN ('open', 'assigned', 'ready', 'closed')),
                     created_at TEXT NOT NULL,
                     published_chat_id INTEGER,
                     published_message_id INTEGER
@@ -119,12 +122,45 @@ class OrderRepository:
         row = connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'orders'"
         ).fetchone()
-        if row is None or "'assigned'" in row["sql"]:
+        if row is None or all(value in row["sql"] for value in ("'assigned'", "'ready'")):
             return
-        connection.executescript(
+        responses_exist = (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'order_responses'"
+            ).fetchone()
+            is not None
+        )
+        connection.execute("PRAGMA foreign_keys = OFF")
+        responses_migration = (
             """
-            BEGIN IMMEDIATE;
-            ALTER TABLE orders RENAME TO orders_legacy;
+            ALTER TABLE order_responses RENAME TO order_responses_legacy;
+        """
+            if responses_exist
+            else ""
+        )
+        responses_restore = (
+            """
+            CREATE TABLE order_responses (
+                order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                respondent_id INTEGER NOT NULL,
+                respondent_name TEXT NOT NULL,
+                respondent_username TEXT,
+                created_at TEXT NOT NULL,
+                selected_at TEXT,
+                PRIMARY KEY (order_id, respondent_id)
+            );
+            INSERT INTO order_responses SELECT * FROM order_responses_legacy;
+            DROP TABLE order_responses_legacy;
+        """
+            if responses_exist
+            else ""
+        )
+        try:
+            connection.executescript(
+                f"""
+                BEGIN IMMEDIATE;
+                {responses_migration}
+                ALTER TABLE orders RENAME TO orders_legacy;
             CREATE TABLE orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 author_id INTEGER NOT NULL,
@@ -141,16 +177,19 @@ class OrderRepository:
                 attachment_file_id TEXT,
                 attachment_type TEXT,
                 status TEXT NOT NULL DEFAULT 'open'
-                    CHECK (status IN ('open', 'assigned', 'closed')),
+                    CHECK (status IN ('open', 'assigned', 'ready', 'closed')),
                 created_at TEXT NOT NULL,
                 published_chat_id INTEGER,
                 published_message_id INTEGER
             );
             INSERT INTO orders SELECT * FROM orders_legacy;
+            {responses_restore}
             DROP TABLE orders_legacy;
             COMMIT;
             """
-        )
+            )
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
 
     def _create_sync(self, draft: OrderDraft) -> Order:
         created_at = datetime.now(UTC)
@@ -302,12 +341,31 @@ class OrderRepository:
             order=self._row_to_order(order_row), selected=selected, responses=responses
         )
 
+    def _mark_ready_sync(self, order_id: int, respondent_id: int) -> Order | None:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE orders SET status = 'ready'
+                WHERE id = ? AND status = 'assigned' AND EXISTS (
+                    SELECT 1 FROM order_responses
+                    WHERE order_id = orders.id
+                        AND respondent_id = ?
+                        AND selected_at IS NOT NULL
+                )
+                """,
+                (order_id, respondent_id),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = connection.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        return self._row_to_order(row) if row else None
+
     def _close_sync(self, order_id: int, author_id: int) -> bool:
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE orders SET status = 'closed'
-                WHERE id = ? AND author_id = ? AND status != 'closed'
+                WHERE id = ? AND author_id = ? AND status IN ('open', 'ready')
                 """,
                 (order_id, author_id),
             )

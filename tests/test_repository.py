@@ -85,6 +85,11 @@ async def test_response_selection_is_unique_and_atomic(tmp_path: Path) -> None:
     assert await repository.select_response(order.id, author_id=42, respondent_id=100) is None
     assert await repository.add_response(order.id, 102, "Третий", None) is False
     assert [item.id for item in await repository.list_active_by_author(42)] == [order.id]
+    assert await repository.close(order.id, author_id=42) is False
+    assert await repository.mark_ready(order.id, respondent_id=100) is None
+    ready = await repository.mark_ready(order.id, respondent_id=101)
+    assert ready is not None
+    assert ready.status is OrderStatus.READY
     assert await repository.close(order.id, author_id=42) is True
 
 
@@ -92,7 +97,7 @@ async def test_response_selection_is_unique_and_atomic(tmp_path: Path) -> None:
 async def test_existing_database_is_migrated_for_assigned_status(tmp_path: Path) -> None:
     database_path = tmp_path / "bot.db"
     with sqlite3.connect(database_path) as connection:
-        connection.execute(
+        connection.executescript(
             """
             CREATE TABLE orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,21 +115,46 @@ async def test_existing_database_is_migrated_for_assigned_status(tmp_path: Path)
                 attachment_file_id TEXT,
                 attachment_type TEXT,
                 status TEXT NOT NULL DEFAULT 'open'
-                    CHECK (status IN ('open', 'closed')),
+                    CHECK (status IN ('open', 'assigned', 'closed')),
                 created_at TEXT NOT NULL,
                 published_chat_id INTEGER,
                 published_message_id INTEGER
-            )
+            );
+            CREATE TABLE order_responses (
+                order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                respondent_id INTEGER NOT NULL,
+                respondent_name TEXT NOT NULL,
+                respondent_username TEXT,
+                created_at TEXT NOT NULL,
+                selected_at TEXT,
+                PRIMARY KEY (order_id, respondent_id)
+            );
             """
         )
     repository = OrderRepository(database_path)
     legacy_order = await repository.create(make_draft())
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO order_responses (
+                order_id, respondent_id, respondent_name, respondent_username,
+                created_at, selected_at
+            ) VALUES (?, 100, 'Исполнитель', 'maker', '2026-07-20T10:00:00+00:00', NULL)
+            """,
+            (legacy_order.id,),
+        )
     await repository.initialize()
     order = await repository.get(legacy_order.id)
 
     assert order is not None
     assert order.description == legacy_order.description
-    await repository.add_response(order.id, 100, "Исполнитель", "maker")
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    responses = await repository.list_responses(order.id)
+    assert [(response.respondent_id, response.respondent_username) for response in responses] == [
+        (100, "maker")
+    ]
     selection = await repository.select_response(order.id, author_id=42, respondent_id=100)
 
     assert selection is not None

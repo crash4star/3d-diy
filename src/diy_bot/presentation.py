@@ -57,9 +57,11 @@ def format_order(order: Order | OrderDraft, *, preview: bool = False) -> str:
     status = "ищет исполнителя"
     if isinstance(order, Order):
         if order.status is OrderStatus.ASSIGNED:
-            status = "исполнитель выбран"
+            status = "в работе"
+        elif order.status is OrderStatus.READY:
+            status = "готово"
         elif order.status is OrderStatus.CLOSED:
-            status = "закрыта"
+            status = "завершено"
     return "\n".join(
         (
             heading,
@@ -112,7 +114,19 @@ def assigned_order_keyboard(order_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Закрыть заявку", callback_data=f"order:close:{order_id}"
+                    text="📦 Отметить «Готово»", callback_data=f"order:ready:{order_id}"
+                )
+            ]
+        ]
+    )
+
+
+def ready_order_keyboard(order_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Завершить заказ", callback_data=f"order:close:{order_id}"
                 )
             ]
         ]

@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from diy_bot.handlers import respond_to_order, select_order_response
+from diy_bot.handlers import (
+    close_order,
+    mark_order_ready,
+    respond_to_order,
+    select_order_response,
+)
 from diy_bot.models import OrderDraft, OrderStatus
 from diy_bot.repository import OrderRepository
 
@@ -120,4 +125,27 @@ async def test_author_selects_one_response_and_everyone_is_notified(tmp_path: Pa
     assert "выбрал вас" in bot.messages[1][1]
     assert len(bot.edits) == 1
     assert bot.edits[0][0:2] == (-1004491175805, 500)
-    assert "исполнитель выбран" in bot.edits[0][2]
+    assert "в работе" in bot.edits[0][2]
+
+    ready_callback = FakeCallback(
+        data=f"order:ready:{order.id}",
+        from_user=FakeUser(id=101, full_name="Второй исполнитель"),
+    )
+    await mark_order_ready(ready_callback, bot, repository)  # type: ignore[arg-type]
+    ready_order = await repository.get(order.id)
+    assert ready_order is not None
+    assert ready_order.status is OrderStatus.READY
+    assert ready_callback.answers == [("Заказ отмечен как готовый", True)]
+    assert "готово" in bot.edits[-1][2]
+
+    close_callback = FakeCallback(
+        data=f"order:close:{order.id}",
+        from_user=FakeUser(id=42, full_name="Заказчик"),
+    )
+    await close_order(close_callback, bot, repository)  # type: ignore[arg-type]
+    closed_order = await repository.get(order.id)
+    assert closed_order is not None
+    assert closed_order.status is OrderStatus.CLOSED
+    assert close_callback.answers == [("Заказ завершён", False)]
+    assert "завершено" in bot.edits[-1][2]
+    assert "Спасибо за работу" in bot.messages[-1][1]
