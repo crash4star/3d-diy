@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from diy_bot.handlers import respond_to_order
+from diy_bot.handlers import respond_to_order, select_order_response
 from diy_bot.models import OrderDraft, OrderStatus
 from diy_bot.repository import OrderRepository
 
@@ -19,6 +19,7 @@ class FakeUser:
 class FakeCallback:
     data: str
     from_user: FakeUser
+    message: object | None = None
     answers: list[tuple[str | None, bool]] = field(default_factory=list)
 
     async def answer(self, text: str | None = None, *, show_alert: bool = False) -> None:
@@ -27,10 +28,23 @@ class FakeCallback:
 
 @dataclass
 class FakeBot:
-    messages: list[tuple[int, str]] = field(default_factory=list)
+    messages: list[tuple[int, str, object | None]] = field(default_factory=list)
+    edits: list[tuple[int, int, str, object | None]] = field(default_factory=list)
 
-    async def send_message(self, chat_id: int, text: str) -> None:
-        self.messages.append((chat_id, text))
+    async def send_message(
+        self, chat_id: int, text: str, *, reply_markup: object | None = None
+    ) -> None:
+        self.messages.append((chat_id, text, reply_markup))
+
+    async def edit_message_text(
+        self,
+        text: str,
+        *,
+        chat_id: int,
+        message_id: int,
+        reply_markup: object | None = None,
+    ) -> None:
+        self.edits.append((chat_id, message_id, text, reply_markup))
 
 
 def make_draft() -> OrderDraft:
@@ -76,6 +90,34 @@ async def test_multiple_responses_do_not_change_order_status(tmp_path: Path) -> 
         [("Отклик отправлен автору", True)],
         [("Отклик отправлен автору", True)],
     ]
-    assert [chat_id for chat_id, _ in bot.messages] == [42, 42]
+    assert [chat_id for chat_id, _, _ in bot.messages] == [42, 42]
     assert "Первый исполнитель" in bot.messages[0][1]
     assert "Второй исполнитель" in bot.messages[1][1]
+
+
+@pytest.mark.asyncio
+async def test_author_selects_one_response_and_everyone_is_notified(tmp_path: Path) -> None:
+    repository = OrderRepository(tmp_path / "bot.db")
+    await repository.initialize()
+    order = await repository.create(make_draft())
+    await repository.mark_published(order.id, -1004491175805, 500)
+    await repository.add_response(order.id, 100, "Первый исполнитель", "first")
+    await repository.add_response(order.id, 101, "Второй исполнитель", "second")
+    callback = FakeCallback(
+        data=f"order:select:{order.id}:101",
+        from_user=FakeUser(id=42, full_name="Заказчик"),
+    )
+    bot = FakeBot()
+
+    await select_order_response(callback, bot, repository)  # type: ignore[arg-type]
+
+    stored = await repository.get(order.id)
+    assert stored is not None
+    assert stored.status is OrderStatus.ASSIGNED
+    assert callback.answers == [("Исполнитель выбран", True)]
+    assert [chat_id for chat_id, _, _ in bot.messages] == [100, 101]
+    assert "другого исполнителя" in bot.messages[0][1]
+    assert "выбрал вас" in bot.messages[1][1]
+    assert len(bot.edits) == 1
+    assert bot.edits[0][0:2] == (-1004491175805, 500)
+    assert "исполнитель выбран" in bot.edits[0][2]

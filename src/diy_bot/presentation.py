@@ -9,7 +9,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from .models import Order, OrderDraft, OrderStatus
+from .models import Order, OrderDraft, OrderResponse, OrderStatus
 
 RULES_TEXT = """<b>Краткие правила</b>
 
@@ -55,8 +55,11 @@ def format_order(order: Order | OrderDraft, *, preview: bool = False) -> str:
     heading = "🧩 <b>Предпросмотр заявки</b>" if preview else f"🧩 <b>Заявка #{order.id:03d}</b>"
     attachment = "Да" if order.attachment_file_id else "Нет"
     status = "ищет исполнителя"
-    if isinstance(order, Order) and order.status is OrderStatus.CLOSED:
-        status = "закрыта"
+    if isinstance(order, Order):
+        if order.status is OrderStatus.ASSIGNED:
+            status = "исполнитель выбран"
+        elif order.status is OrderStatus.CLOSED:
+            status = "закрыта"
     return "\n".join(
         (
             heading,
@@ -100,5 +103,60 @@ def order_keyboard(order_id: int) -> InlineKeyboardMarkup:
                     text="✅ Закрыть заявку", callback_data=f"order:close:{order_id}"
                 )
             ],
+        ]
+    )
+
+
+def assigned_order_keyboard(order_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Закрыть заявку", callback_data=f"order:close:{order_id}"
+                )
+            ]
+        ]
+    )
+
+
+def my_orders_keyboard(orders: list[tuple[Order, int]]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"👥 #{order.id:03d}: отклики ({response_count})",
+                    callback_data=f"order:responses:{order.id}",
+                )
+            ]
+            for order, response_count in orders
+        ]
+    )
+
+
+def choose_response_keyboard(order_id: int, respondent_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Выбрать исполнителя",
+                    callback_data=f"order:select:{order_id}:{respondent_id}",
+                )
+            ]
+        ]
+    )
+
+
+def responses_keyboard(order: Order, responses: list[OrderResponse]) -> InlineKeyboardMarkup | None:
+    if order.status is not OrderStatus.OPEN or not responses:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"✅ Выбрать {response.respondent_name[:30]}",
+                    callback_data=(f"order:select:{order.id}:{response.respondent_id}"),
+                )
+            ]
+            for response in responses
         ]
     )

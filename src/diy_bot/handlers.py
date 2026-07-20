@@ -19,10 +19,14 @@ from .presentation import (
     MY_ORDERS_BUTTON,
     RULES_BUTTON,
     RULES_TEXT,
+    assigned_order_keyboard,
+    choose_response_keyboard,
     format_order,
     main_menu_keyboard,
+    my_orders_keyboard,
     order_keyboard,
     preview_keyboard,
+    responses_keyboard,
     rules_acceptance_keyboard,
 )
 from .repository import OrderRepository
@@ -343,9 +347,12 @@ async def my_orders(message: Message, repository: OrderRepository) -> None:
     if not orders:
         await message.answer("У вас нет активных заявок.")
         return
+    orders_with_counts = [
+        (order, len(await repository.list_responses(order.id))) for order in orders
+    ]
     lines = ["<b>Ваши активные заявки:</b>"]
     lines.extend(f"#{order.id:03d} — {escape(order.description[:80])}" for order in orders)
-    await message.answer("\n".join(lines))
+    await message.answer("\n".join(lines), reply_markup=my_orders_keyboard(orders_with_counts))
 
 
 @router.callback_query(F.data.startswith("order:respond:"))
@@ -362,6 +369,16 @@ async def respond_to_order(callback: CallbackQuery, bot: Bot, repository: OrderR
         await callback.answer("Это ваша заявка", show_alert=True)
         return
     respondent = callback.from_user
+    if not await repository.add_response(
+        order.id,
+        respondent.id,
+        respondent.full_name,
+        respondent.username,
+    ):
+        await callback.answer(
+            "Вы уже откликнулись или заявка больше не принимает отклики", show_alert=True
+        )
+        return
     username = f"@{escape(respondent.username)}" if respondent.username else "без username"
     try:
         await bot.send_message(
@@ -369,13 +386,107 @@ async def respond_to_order(callback: CallbackQuery, bot: Bot, repository: OrderR
             f"На заявку #{order.id:03d} откликнулся "
             f'<a href="tg://user?id={respondent.id}">{escape(respondent.full_name)}</a> '
             f"({username}).",
+            reply_markup=choose_response_keyboard(order.id, respondent.id),
         )
     except TelegramAPIError:
         await callback.answer(
-            "Автор ещё не открыл личный чат с ботом. Попробуйте позже.", show_alert=True
+            "Отклик сохранён. Автор увидит его в разделе «Мои заявки».", show_alert=True
         )
         return
     await callback.answer("Отклик отправлен автору", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("order:responses:"))
+async def show_order_responses(callback: CallbackQuery, repository: OrderRepository) -> None:
+    order_id = _callback_order_id(callback.data)
+    if order_id is None:
+        await callback.answer("Некорректный номер заявки", show_alert=True)
+        return
+    order = await repository.get(order_id)
+    if order is None or callback.from_user.id != order.author_id:
+        await callback.answer("Эта заявка вам недоступна", show_alert=True)
+        return
+    responses = await repository.list_responses(order_id)
+    if not responses:
+        await callback.answer("На заявку пока никто не откликнулся", show_alert=True)
+        return
+    lines = [f"<b>Отклики на заявку #{order.id:03d}:</b>"]
+    for response in responses:
+        username = (
+            f"@{escape(response.respondent_username)}"
+            if response.respondent_username
+            else "без username"
+        )
+        marker = " — выбран" if response.selected_at else ""
+        lines.append(
+            f'• <a href="tg://user?id={response.respondent_id}">'
+            f"{escape(response.respondent_name)}</a> ({username}){marker}"
+        )
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "\n".join(lines), reply_markup=responses_keyboard(order, responses)
+        )
+
+
+@router.callback_query(F.data.startswith("order:select:"))
+async def select_order_response(
+    callback: CallbackQuery, bot: Bot, repository: OrderRepository
+) -> None:
+    ids = _callback_selection_ids(callback.data)
+    if ids is None:
+        await callback.answer("Некорректные данные отклика", show_alert=True)
+        return
+    order_id, respondent_id = ids
+    order = await repository.get(order_id)
+    if order is None or callback.from_user.id != order.author_id:
+        await callback.answer("Выбрать исполнителя может только автор", show_alert=True)
+        return
+    selection = await repository.select_response(order_id, order.author_id, respondent_id)
+    if selection is None:
+        await callback.answer("Исполнитель уже выбран или отклик не найден", show_alert=True)
+        return
+
+    await callback.answer("Исполнитель выбран", show_alert=True)
+    if callback.message:
+        await callback.message.answer(
+            f"Для заявки #{order_id:03d} выбран исполнитель: "
+            f'<a href="tg://user?id={selection.selected.respondent_id}">'
+            f"{escape(selection.selected.respondent_name)}</a>."
+        )
+
+    for response in selection.responses:
+        if response.respondent_id == selection.selected.respondent_id:
+            text = (
+                f'🎉 <a href="tg://user?id={selection.order.author_id}">'
+                f"{escape(selection.order.author_name)}</a> выбрал вас исполнителем "
+                f"заявки #{order_id:03d}. "
+                "Свяжитесь с ним лично."
+            )
+        else:
+            text = (
+                f"По заявке #{order_id:03d} заказчик выбрал другого исполнителя. Спасибо за отклик!"
+            )
+        try:
+            await bot.send_message(response.respondent_id, text)
+        except TelegramAPIError as error:
+            logger.warning(
+                "Не удалось уведомить пользователя %s о выборе по заявке %s: %s",
+                response.respondent_id,
+                order_id,
+                error,
+            )
+
+    if selection.order.published_chat_id and selection.order.published_message_id:
+        try:
+            await bot.edit_message_text(
+                format_order(selection.order),
+                chat_id=selection.order.published_chat_id,
+                message_id=selection.order.published_message_id,
+                reply_markup=assigned_order_keyboard(order_id),
+            )
+        except TelegramAPIError as error:
+            logger.warning("Не удалось обновить опубликованную заявку %s: %s", order_id, error)
 
 
 @router.callback_query(F.data.startswith("order:close:"))
@@ -465,3 +576,15 @@ def _callback_user_id(data: str | None) -> int | None:
     except (IndexError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _callback_selection_ids(data: str | None) -> tuple[int, int] | None:
+    try:
+        prefix, action, order_value, respondent_value = (data or "").split(":")
+        order_id = int(order_value)
+        respondent_id = int(respondent_value)
+    except (ValueError, TypeError):
+        return None
+    if prefix != "order" or action != "select" or order_id < 1 or respondent_id < 1:
+        return None
+    return order_id, respondent_id

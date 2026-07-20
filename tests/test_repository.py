@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -60,3 +61,71 @@ async def test_only_unpublished_order_can_be_deleted(tmp_path: Path) -> None:
 
     assert await repository.get(unpublished.id) is None
     assert await repository.get(published.id) is not None
+
+
+@pytest.mark.asyncio
+async def test_response_selection_is_unique_and_atomic(tmp_path: Path) -> None:
+    repository = OrderRepository(tmp_path / "bot.db")
+    await repository.initialize()
+    order = await repository.create(make_draft())
+    await repository.mark_published(order.id, -1001, 52)
+
+    assert await repository.add_response(order.id, 100, "Первый", "first") is True
+    assert await repository.add_response(order.id, 100, "Первый", "first") is False
+    assert await repository.add_response(order.id, 101, "Второй", None) is True
+
+    selection = await repository.select_response(order.id, author_id=42, respondent_id=101)
+    assert selection is not None
+    assert selection.order.status is OrderStatus.ASSIGNED
+    assert selection.selected.respondent_id == 101
+    assert [response.respondent_id for response in selection.responses] == [100, 101]
+    assert selection.responses[0].selected_at is None
+    assert selection.responses[1].selected_at is not None
+
+    assert await repository.select_response(order.id, author_id=42, respondent_id=100) is None
+    assert await repository.add_response(order.id, 102, "Третий", None) is False
+    assert [item.id for item in await repository.list_active_by_author(42)] == [order.id]
+    assert await repository.close(order.id, author_id=42) is True
+
+
+@pytest.mark.asyncio
+async def test_existing_database_is_migrated_for_assigned_status(tmp_path: Path) -> None:
+    database_path = tmp_path / "bot.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                author_id INTEGER NOT NULL,
+                author_name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                quantity TEXT NOT NULL,
+                dimensions TEXT NOT NULL,
+                model_info TEXT NOT NULL,
+                material TEXT NOT NULL,
+                color TEXT NOT NULL,
+                deadline TEXT NOT NULL,
+                budget TEXT NOT NULL,
+                building TEXT NOT NULL,
+                attachment_file_id TEXT,
+                attachment_type TEXT,
+                status TEXT NOT NULL DEFAULT 'open'
+                    CHECK (status IN ('open', 'closed')),
+                created_at TEXT NOT NULL,
+                published_chat_id INTEGER,
+                published_message_id INTEGER
+            )
+            """
+        )
+    repository = OrderRepository(database_path)
+    legacy_order = await repository.create(make_draft())
+    await repository.initialize()
+    order = await repository.get(legacy_order.id)
+
+    assert order is not None
+    assert order.description == legacy_order.description
+    await repository.add_response(order.id, 100, "Исполнитель", "maker")
+    selection = await repository.select_response(order.id, author_id=42, respondent_id=100)
+
+    assert selection is not None
+    assert selection.order.status is OrderStatus.ASSIGNED

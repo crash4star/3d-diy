@@ -7,6 +7,7 @@ from enum import StrEnum
 
 class OrderStatus(StrEnum):
     OPEN = "open"
+    ASSIGNED = "assigned"
     CLOSED = "closed"
 
 
@@ -34,3 +35,20 @@ class Order(OrderDraft):
     created_at: datetime | None = None
     published_chat_id: int | None = None
     published_message_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OrderResponse:
+    order_id: int
+    respondent_id: int
+    respondent_name: str
+    respondent_username: str | None
+    created_at: datetime
+    selected_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OrderSelection:
+    order: Order
+    selected: OrderResponse
+    responses: tuple[OrderResponse, ...]
