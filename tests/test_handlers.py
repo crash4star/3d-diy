@@ -6,6 +6,7 @@ import pytest
 from diy_bot.handlers import (
     close_order,
     mark_order_ready,
+    my_works,
     respond_to_order,
     select_order_response,
 )
@@ -50,6 +51,15 @@ class FakeBot:
         reply_markup: object | None = None,
     ) -> None:
         self.edits.append((chat_id, message_id, text, reply_markup))
+
+
+@dataclass
+class FakeMessage:
+    from_user: FakeUser
+    answers: list[tuple[str, object | None]] = field(default_factory=list)
+
+    async def answer(self, text: str, *, reply_markup: object | None = None) -> None:
+        self.answers.append((text, reply_markup))
 
 
 def make_draft() -> OrderDraft:
@@ -149,3 +159,22 @@ async def test_author_selects_one_response_and_everyone_is_notified(tmp_path: Pa
     assert close_callback.answers == [("Заказ завершён", False)]
     assert "завершено" in bot.edits[-1][2]
     assert "Спасибо за работу" in bot.messages[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_my_works_shows_status_and_ready_action(tmp_path: Path) -> None:
+    repository = OrderRepository(tmp_path / "bot.db")
+    await repository.initialize()
+    order = await repository.create(make_draft())
+    await repository.add_response(order.id, 101, "Исполнитель", "maker")
+    await repository.select_response(order.id, author_id=42, respondent_id=101)
+    message = FakeMessage(from_user=FakeUser(id=101, full_name="Исполнитель"))
+
+    await my_works(message, repository)  # type: ignore[arg-type]
+
+    assert len(message.answers) == 1
+    text, keyboard = message.answers[0]
+    assert f"#{order.id:03d}" in text
+    assert "вы выбраны · в работе" in text
+    assert keyboard is not None
+    assert keyboard.inline_keyboard[0][0].callback_data == f"order:ready:{order.id}"

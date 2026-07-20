@@ -9,7 +9,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from .models import Order, OrderDraft, OrderResponse, OrderStatus
+from .models import Order, OrderDraft, OrderResponse, OrderStatus, WorkItem
 
 RULES_TEXT = """<b>Краткие правила</b>
 
@@ -22,6 +22,7 @@ RULES_TEXT = """<b>Краткие правила</b>
 
 CREATE_ORDER_BUTTON = "🧩 Создать заявку"
 MY_ORDERS_BUTTON = "📋 Мои заявки"
+MY_WORKS_BUTTON = "🛠 Мои работы"
 RULES_BUTTON = "📖 Правила"
 CANCEL_BUTTON = "❌ Отменить заполнение"
 
@@ -30,7 +31,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=CREATE_ORDER_BUTTON), KeyboardButton(text=MY_ORDERS_BUTTON)],
-            [KeyboardButton(text=RULES_BUTTON), KeyboardButton(text=CANCEL_BUTTON)],
+            [KeyboardButton(text=MY_WORKS_BUTTON), KeyboardButton(text=RULES_BUTTON)],
+            [KeyboardButton(text=CANCEL_BUTTON)],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -174,3 +176,44 @@ def responses_keyboard(order: Order, responses: list[OrderResponse]) -> InlineKe
             for response in responses
         ]
     )
+
+
+def format_work_items(items: list[WorkItem]) -> str:
+    lines = ["<b>Ваши отклики и работы:</b>"]
+    for item in items:
+        lines.extend(
+            (
+                "",
+                f"<b>#{item.order.id:03d}</b> — {escape(item.order.description[:70])}",
+                f"Статус: {_work_status(item)}",
+            )
+        )
+    return "\n".join(lines)
+
+
+def my_works_keyboard(items: list[WorkItem]) -> InlineKeyboardMarkup | None:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"📦 #{item.order.id:03d} отметить «Готово»",
+                callback_data=f"order:ready:{item.order.id}",
+            )
+        ]
+        for item in items
+        if item.response.selected_at and item.order.status is OrderStatus.ASSIGNED
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def _work_status(item: WorkItem) -> str:
+    if item.response.selected_at is None:
+        if item.order.status is OrderStatus.OPEN:
+            return "отклик рассматривается"
+        return "выбран другой исполнитель"
+    if item.order.status is OrderStatus.ASSIGNED:
+        return "вы выбраны · в работе"
+    if item.order.status is OrderStatus.READY:
+        return "готово · ожидает завершения заказчиком"
+    if item.order.status is OrderStatus.CLOSED:
+        return "завершено"
+    return "вы выбраны"

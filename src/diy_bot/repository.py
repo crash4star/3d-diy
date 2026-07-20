@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .models import Order, OrderDraft, OrderResponse, OrderSelection, OrderStatus
+from .models import Order, OrderDraft, OrderResponse, OrderSelection, OrderStatus, WorkItem
 
 T = TypeVar("T")
 
@@ -47,6 +47,11 @@ class OrderRepository:
 
     async def list_responses(self, order_id: int) -> list[OrderResponse]:
         return await self._run(self._list_responses_sync, order_id)
+
+    async def list_work_by_respondent(
+        self, respondent_id: int, *, limit: int = 20
+    ) -> list[WorkItem]:
+        return await self._run(self._list_work_by_respondent_sync, respondent_id, limit)
 
     async def select_response(
         self, order_id: int, author_id: int, respondent_id: int
@@ -114,6 +119,8 @@ class OrderRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_order_responses_order_created
                     ON order_responses(order_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_order_responses_respondent_created
+                    ON order_responses(respondent_id, created_at DESC);
                 """
             )
 
@@ -290,6 +297,45 @@ class OrderRepository:
                 (order_id,),
             ).fetchall()
         return [self._row_to_response(row) for row in rows]
+
+    def _list_work_by_respondent_sync(self, respondent_id: int, limit: int) -> list[WorkItem]:
+        if limit < 1:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    orders.*,
+                    order_responses.order_id AS response_order_id,
+                    order_responses.respondent_id,
+                    order_responses.respondent_name,
+                    order_responses.respondent_username,
+                    order_responses.created_at AS response_created_at,
+                    order_responses.selected_at
+                FROM order_responses
+                JOIN orders ON orders.id = order_responses.order_id
+                WHERE order_responses.respondent_id = ?
+                ORDER BY order_responses.created_at DESC, orders.id DESC
+                LIMIT ?
+                """,
+                (respondent_id, limit),
+            ).fetchall()
+        return [
+            WorkItem(
+                order=self._row_to_order(row),
+                response=OrderResponse(
+                    order_id=row["response_order_id"],
+                    respondent_id=row["respondent_id"],
+                    respondent_name=row["respondent_name"],
+                    respondent_username=row["respondent_username"],
+                    created_at=datetime.fromisoformat(row["response_created_at"]),
+                    selected_at=(
+                        datetime.fromisoformat(row["selected_at"]) if row["selected_at"] else None
+                    ),
+                ),
+            )
+            for row in rows
+        ]
 
     def _select_response_sync(
         self, order_id: int, author_id: int, respondent_id: int

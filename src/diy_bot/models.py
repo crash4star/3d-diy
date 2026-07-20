@@ -53,3 +53,9 @@ class OrderSelection:
     order: Order
     selected: OrderResponse
     responses: tuple[OrderResponse, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkItem:
+    order: Order
+    response: OrderResponse

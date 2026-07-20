@@ -3,6 +3,7 @@ from diy_bot.presentation import (
     CANCEL_BUTTON,
     CREATE_ORDER_BUTTON,
     MY_ORDERS_BUTTON,
+    MY_WORKS_BUTTON,
     RULES_BUTTON,
     format_order,
     main_menu_keyboard,
@@ -38,6 +39,7 @@ def test_main_menu_contains_primary_actions() -> None:
     assert button_texts == {
         CREATE_ORDER_BUTTON,
         MY_ORDERS_BUTTON,
+        MY_WORKS_BUTTON,
         RULES_BUTTON,
         CANCEL_BUTTON,
     }

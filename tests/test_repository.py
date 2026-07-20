@@ -73,6 +73,9 @@ async def test_response_selection_is_unique_and_atomic(tmp_path: Path) -> None:
     assert await repository.add_response(order.id, 100, "Первый", "first") is True
     assert await repository.add_response(order.id, 100, "Первый", "first") is False
     assert await repository.add_response(order.id, 101, "Второй", None) is True
+    first_work = await repository.list_work_by_respondent(100)
+    assert [item.order.id for item in first_work] == [order.id]
+    assert first_work[0].response.selected_at is None
 
     selection = await repository.select_response(order.id, author_id=42, respondent_id=101)
     assert selection is not None
@@ -81,6 +84,9 @@ async def test_response_selection_is_unique_and_atomic(tmp_path: Path) -> None:
     assert [response.respondent_id for response in selection.responses] == [100, 101]
     assert selection.responses[0].selected_at is None
     assert selection.responses[1].selected_at is not None
+    selected_work = await repository.list_work_by_respondent(101)
+    assert selected_work[0].order.status is OrderStatus.ASSIGNED
+    assert selected_work[0].response.selected_at is not None
 
     assert await repository.select_response(order.id, author_id=42, respondent_id=100) is None
     assert await repository.add_response(order.id, 102, "Третий", None) is False

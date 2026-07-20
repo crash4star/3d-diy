@@ -17,13 +17,16 @@ from .presentation import (
     CANCEL_BUTTON,
     CREATE_ORDER_BUTTON,
     MY_ORDERS_BUTTON,
+    MY_WORKS_BUTTON,
     RULES_BUTTON,
     RULES_TEXT,
     assigned_order_keyboard,
     choose_response_keyboard,
     format_order,
+    format_work_items,
     main_menu_keyboard,
     my_orders_keyboard,
+    my_works_keyboard,
     order_keyboard,
     preview_keyboard,
     ready_order_keyboard,
@@ -354,6 +357,18 @@ async def my_orders(message: Message, repository: OrderRepository) -> None:
     lines = ["<b>Ваши активные заявки:</b>"]
     lines.extend(f"#{order.id:03d} — {escape(order.description[:80])}" for order in orders)
     await message.answer("\n".join(lines), reply_markup=my_orders_keyboard(orders_with_counts))
+
+
+@router.message(Command("myworks"))
+@router.message(F.text == MY_WORKS_BUTTON)
+async def my_works(message: Message, repository: OrderRepository) -> None:
+    if message.from_user is None:
+        return
+    items = await repository.list_work_by_respondent(message.from_user.id)
+    if not items:
+        await message.answer("Вы пока не откликались на заявки.")
+        return
+    await message.answer(format_work_items(items), reply_markup=my_works_keyboard(items))
 
 
 @router.callback_query(F.data.startswith("order:respond:"))
